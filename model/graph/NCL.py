@@ -3,13 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from base.graph_recommender import GraphRecommender
 from util.conf import OptionConf
-from util.sampler import next_batch_pairwise
+from util.sampler import next_batch_pairwise, next_batch_pairwise_k
 from base.torch_interface import TorchGraphInterface
-from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE
+from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict
 import faiss
 # paper: Improving Graph Collaborative Filtering with Neighborhood-enriched Contrastive Learning. WWW'22
 
-
+torch.cuda.set_device(0)
 class NCL(GraphRecommender):
     def __init__(self, conf, training_set, test_set):
         super(NCL, self).__init__(conf, training_set, test_set)
@@ -35,7 +35,7 @@ class NCL(GraphRecommender):
 
     def run_kmeans(self, x):
         """Run K-means algorithm to get k clusters of the input tensor x        """
-        kmeans = faiss.Kmeans(d=self.emb_size, k=self.k, gpu=True)
+        kmeans = faiss.Kmeans(d=self.emb_size, k=self.k, gpu=False)
         kmeans.train(x)
         cluster_cents = kmeans.centroids
         _, I = kmeans.index.search(x, 1)
@@ -64,7 +64,8 @@ class NCL(GraphRecommender):
         norm_user_emb2 = F.normalize(initial_user_emb)
         norm_all_user_emb = F.normalize(initial_user_emb_all)
         pos_score_user = torch.mul(norm_user_emb1, norm_user_emb2).sum(dim=1)
-        ttl_score_user = torch.matmul(norm_user_emb1, norm_all_user_emb.transpose(0, 1))
+        # ttl_score_user = torch.matmul(norm_user_emb1, norm_all_user_emb.transpose(0, 1))
+        ttl_score_user = torch.matmul(norm_user_emb1, norm_user_emb1.transpose(0, 1))
         pos_score_user = torch.exp(pos_score_user / self.ssl_temp)
         ttl_score_user = torch.exp(ttl_score_user / self.ssl_temp).sum(dim=1)
         ssl_loss_user = -torch.log(pos_score_user / ttl_score_user).sum()
@@ -75,7 +76,8 @@ class NCL(GraphRecommender):
         norm_item_emb2 = F.normalize(initial_item_emb)
         norm_all_item_emb = F.normalize(initial_item_emb_all)
         pos_score_item = torch.mul(norm_item_emb1, norm_item_emb2).sum(dim=1)
-        ttl_score_item = torch.matmul(norm_item_emb1, norm_all_item_emb.transpose(0, 1))
+        # ttl_score_item = torch.matmul(norm_item_emb1, norm_all_item_emb.transpose(0, 1))
+        ttl_score_item = torch.matmul(norm_item_emb1, norm_item_emb1.transpose(0, 1))
         pos_score_item = torch.exp(pos_score_item / self.ssl_temp)
         ttl_score_item = torch.exp(ttl_score_item / self.ssl_temp).sum(dim=1)
         ssl_loss_item = -torch.log(pos_score_item / ttl_score_item).sum()
@@ -87,14 +89,19 @@ class NCL(GraphRecommender):
         model = self.model.cuda()
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lRate)
         for epoch in range(self.maxEpoch):
+            n_negs = 1
             if epoch >= 20:
                 self.e_step()
-            for n, batch in enumerate(next_batch_pairwise(self.data, self.batch_size)):
+            for n, batch in enumerate(next_batch_pairwise(self.data, self.batch_size, n_negs=n_negs)):
                 user_idx, pos_idx, neg_idx = batch
                 model.train()
                 rec_user_emb, rec_item_emb, emb_list  = model()
                 user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
-                rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
+                rec_item_idx = torch.Tensor(pos_idx).type(torch.long).view(-1, 1)
+                neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                rec_loss = kssm_dict(rec_user_emb[user_idx], {rec_item_emb:rec_item_idx}
+                                   ,{rec_item_emb: neg_item_idx}, [1],[False],[1])
+                # rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
                 initial_emb = emb_list[0]
                 context_emb = emb_list[self.hyper_layers*2]
                 ssl_loss = self.ssl_layer_loss(context_emb,initial_emb,user_idx,pos_idx)
@@ -104,11 +111,13 @@ class NCL(GraphRecommender):
                     optimizer.zero_grad()
                     warm_up_loss.backward()
                     optimizer.step()
+                    self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item()}, epoch*self.batch_size+n)
                     if n % 100 == 0:
                         print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'ssl_loss', ssl_loss.item())
                 else:
                     # Backward and optimize
                     proto_loss = self.ProtoNCE_loss(initial_emb, user_idx, pos_idx)
+                    self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item(), 'proto_loss':proto_loss.item()}, epoch*self.batch_size+n)
                     batch_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb) / self.batch_size + ssl_loss + proto_loss
                     optimizer.zero_grad()
                     batch_loss.backward()
@@ -118,7 +127,8 @@ class NCL(GraphRecommender):
             model.eval()
             with torch.no_grad():
                 self.user_emb, self.item_emb, _ = model()
-            self.fast_evaluation(epoch)
+            if(self.fast_evaluation(epoch)):
+                break
         self.user_emb, self.item_emb = self.best_user_emb, self.best_item_emb
 
     def save(self):

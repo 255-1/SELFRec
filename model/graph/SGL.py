@@ -3,14 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from base.graph_recommender import GraphRecommender
 from util.conf import OptionConf
-from util.sampler import next_batch_pairwise
+from util.sampler import next_batch_pairwise, next_batch_pairwise_k, sample_cl_negtive_idx, next_batch_pairwise2
 from base.torch_interface import TorchGraphInterface
-from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE
+from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict, SSSM
 from data.augmentor import GraphAugmentor
 
 # Paper: self-supervised graph learning for recommendation. SIGIR'21
 
-
+torch.cuda.set_device(3)
 class SGL(GraphRecommender):
     def __init__(self, conf, training_set, test_set):
         super(SGL, self).__init__(conf, training_set, test_set)
@@ -19,8 +19,8 @@ class SGL(GraphRecommender):
         aug_type = self.aug_type = int(args['-augtype'])
         drop_rate = float(args['-droprate'])
         n_layers = int(args['-n_layer'])
-        temp = float(args['-temp'])
-        self.model = SGL_Encoder(self.data, self.emb_size, drop_rate, n_layers, temp, aug_type)
+        self.temp = float(args['-temp'])
+        self.model = SGL_Encoder(self.data, self.emb_size, drop_rate, n_layers, self.temp, aug_type)
 
     def train(self):
         model = self.model.cuda()
@@ -28,23 +28,37 @@ class SGL(GraphRecommender):
         for epoch in range(self.maxEpoch):
             dropped_adj1 = model.graph_reconstruction()
             dropped_adj2 = model.graph_reconstruction()
-            for n, batch in enumerate(next_batch_pairwise(self.data, self.batch_size)):
-                user_idx, pos_idx, neg_idx = batch
+            n_negs = 3500
+            for n, batch in enumerate(next_batch_pairwise2(self.data, self.batch_size, n_negs)):
+                user_idx, pos_idx, neg_idx, neg_idx2 = batch
+                # user_idx, pos_idx, neg_idx = batch
                 rec_user_emb, rec_item_emb = model()
                 user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
-                rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
-                cl_loss = self.cl_rate * model.cal_cl_loss([user_idx,pos_idx],dropped_adj1,dropped_adj2)
+                # rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
+                neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                neg_user_idx = torch.Tensor(neg_idx2).type(torch.long).view(-1, n_negs)
+                # rec_loss = kssm_dict(rec_user_emb[user_idx], {rec_item_emb:rec_item_idx}
+                #                    ,{rec_item_emb: neg_item_idx}, [1],[False],[1])
+                rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], 0.2, False)
+                user_view_1, item_view_1 = self.model.forward(dropped_adj1)
+                user_view_2, item_view_2 = self.model.forward(dropped_adj2)
+                # u_pos_idx, u_neg_idx = sample_cl_negtive_idx(user_idx, n_negs)
+                loss_2 = SSSM(item_view_1[pos_idx], item_view_2[pos_idx], item_view_2[neg_item_idx], self.temp, True)
+                loss_3 = SSSM(user_view_1[user_idx], user_view_2[user_idx], user_view_2[neg_user_idx], self.temp, True)
+                cl_loss = self.cl_rate *(loss_2 + loss_3)
+                # cl_loss = self.cl_rate * model.cal_cl_loss([user_idx,pos_idx],dropped_adj1,dropped_adj2)
                 batch_loss =  rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb,neg_item_emb) + cl_loss
                 # Backward and optimize
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
+                self.writer.add_scalars('SGL', {'rec_loss:':rec_loss.item(), 'cl_loss:':cl_loss.item()}, epoch*self.batch_size+n)
                 if n % 100==0:
                     print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'cl_loss', cl_loss.item())
             with torch.no_grad():
                 self.user_emb, self.item_emb = self.model()
-            if epoch>=5:
-                self.fast_evaluation(epoch)
+            if(self.fast_evaluation(epoch)):
+                break
         self.user_emb, self.item_emb = self.best_user_emb, self.best_item_emb
 
     def save(self):

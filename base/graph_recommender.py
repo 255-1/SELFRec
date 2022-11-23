@@ -69,7 +69,7 @@ class GraphRecommender(Recommender):
                     line += '*'
             line += '\n'
             self.recOutput.append(line)
-        current_time = strftime("%Y-%m-%d %H-%M-%S", localtime(time()))
+        current_time = self.current_time
         # output prediction result
         out_dir = self.output['-dir']
         file_name = self.config['model.name'] + '@' + current_time + '-top-' + str(self.max_N) + 'items' + '.txt'
@@ -125,4 +125,5 @@ class GraphRecommender(Recommender):
         print('*Best Performance* ')
         print('Epoch:', str(self.bestPerformance[0]) + ',', bp)
         print('-' * 120)
-        return measure
+        self.writer.add_scalars(self.model_name, {'recall':self.bestPerformance[1]['Recall'], 'NDCG':self.bestPerformance[1]['NDCG']}, epoch)
+        return (epoch -self.bestPerformance[0]) >= 10

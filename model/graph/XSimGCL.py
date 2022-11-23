@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from base.graph_recommender import GraphRecommender
 from util.conf import OptionConf
-from util.sampler import next_batch_pairwise
+from util.sampler import next_batch_pairwise, next_batch_pairwise_k
 from base.torch_interface import TorchGraphInterface
-from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE
+from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict
 
 # Paper: XSimGCL - Towards Extremely Simple Graph Contrastive Learning for Recommendation
 
@@ -25,22 +25,29 @@ class XSimGCL(GraphRecommender):
         model = self.model.cuda()
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lRate)
         for epoch in range(self.maxEpoch):
-            for n, batch in enumerate(next_batch_pairwise(self.data, self.batch_size)):
+            n_negs = 64
+            for n, batch in enumerate(next_batch_pairwise_k(self.data, self.batch_size, n_negs=n_negs)):
                 user_idx, pos_idx, neg_idx = batch
                 rec_user_emb, rec_item_emb, cl_user_emb, cl_item_emb  = model(True)
                 user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
-                rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
+                # rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
+                rec_item_idx = torch.Tensor(pos_idx).type(torch.long).view(-1, 1)
+                neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                rec_loss = kssm_dict(rec_user_emb[user_idx], {rec_item_emb:rec_item_idx}
+                                   ,{rec_item_emb: neg_item_idx}, [1],[False],[1])
                 cl_loss = self.cl_rate * self.cal_cl_loss([user_idx,pos_idx],rec_user_emb,cl_user_emb,rec_item_emb,cl_item_emb)
                 batch_loss =  rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb) + cl_loss
                 # Backward and optimize
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
+                self.writer.add_scalars('XSimGCL', {'rec_loss:':rec_loss.item(), 'cl_loss:':cl_loss.item()}, epoch*self.batch_size+n)
                 if n % 100==0:
                     print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'cl_loss', cl_loss.item())
             with torch.no_grad():
                 self.user_emb, self.item_emb = self.model()
-            self.fast_evaluation(epoch)
+            if(self.fast_evaluation(epoch)):
+                break
         self.user_emb, self.item_emb = self.best_user_emb, self.best_item_emb
 
     def cal_cl_loss(self, idx, user_view1,user_view2,item_view1,item_view2):

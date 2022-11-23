@@ -3,7 +3,11 @@ from util.conf import OptionConf
 from util.logger import Log
 from os.path import abspath
 from time import strftime, localtime, time
-
+from torch.utils.tensorboard import SummaryWriter
+import tensorflow as tf
+import tensorboard as tb
+import os
+tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
 
 class Recommender(object):
     def __init__(self, conf, training_set, test_set, **kwargs):
@@ -17,8 +21,9 @@ class Recommender(object):
         self.lRate = float(self.config['learnRate'])
         self.reg = float(self.config['reg.lambda'])
         self.output = OptionConf(self.config['output.setup'])
-        current_time = strftime("%Y-%m-%d %H-%M-%S", localtime(time()))
-        self.model_log = Log(self.model_name, self.model_name + ' ' + current_time)
+        self.current_time = strftime("%Y-%m-%d %H-%M-%S", localtime(time()))
+        self.writer = SummaryWriter('runs/'+ self.model_name + '/' +self.current_time)
+        self.model_log = Log(self.model_name, self.model_name + ' ' + self.current_time)
         self.result = []
         self.recOutput = []
 
@@ -36,6 +41,8 @@ class Recommender(object):
         print('Learning Rate:', self.lRate)
         print('Batch Size:', self.batch_size)
         print('Regularization Parameter:',  self.reg)
+        print('Start Time:', self.current_time)
+        print("PID: ", os.getpid())
         parStr = ''
         if self.config.contain(self.config['model.name']):
             args = OptionConf(self.config[self.config['model.name']])
