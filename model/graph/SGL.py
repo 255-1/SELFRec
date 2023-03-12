@@ -89,7 +89,6 @@ class SGL(GraphRecommender):
                     optimizer.zero_grad()
                     batch_loss.backward()
                     optimizer.step()
-                    self.writer.add_scalars('SGL', {'rec_loss:':rec_loss.item(), 'cl_loss:':cl_loss.item()}, epoch*self.batch_size+n)
                     if n % 100==0:
                         print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'cl_loss', cl_loss.item())
 

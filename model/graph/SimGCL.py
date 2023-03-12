@@ -25,7 +25,6 @@ class SimGCL(GraphRecommender):
 
     def train(self):
         model = self.model.cuda()
-        self.writer.flush()
         print(self.get_parameter_number(model))
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lRate)
         for epoch in range(self.maxEpoch):
@@ -90,15 +89,12 @@ class SimGCL(GraphRecommender):
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
-                self.writer.add_scalars('SGL', {'rec_loss:':rec_loss.item(), 'cl_loss:':cl_loss.item()}, epoch*self.batch_size+n)
                 if n % 100==0:
                     print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'cl_loss', cl_loss.item())
             with torch.no_grad():
                 self.user_emb, self.item_emb = self.model()
             if(self.fast_evaluation(epoch)):
                 break
-        self.writer.flush()
-        self.writer.close()
         self.user_emb, self.item_emb = self.best_user_emb, self.best_item_emb
 
     def cal_cl_loss(self, idx):

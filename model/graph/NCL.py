@@ -155,7 +155,6 @@ class NCL(GraphRecommender):
 
                 # Backward and optimize
                 proto_loss = self.ProtoNCE_loss(initial_emb, user_idx, pos_idx)
-                self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item(), 'proto_loss':proto_loss.item()}, epoch*self.batch_size+n)
                 batch_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb) / self.batch_size + ssl_loss + proto_loss
                 optimizer.zero_grad()
                 batch_loss.backward()

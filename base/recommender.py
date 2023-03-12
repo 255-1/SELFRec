@@ -22,7 +22,6 @@ class Recommender(object):
         self.reg = float(self.config['reg.lambda'])
         self.output = OptionConf(self.config['output.setup'])
         self.current_time = strftime("%Y-%m-%d %H-%M-%S", localtime(time()))
-        self.writer = SummaryWriter('runs/'+ self.model_name + '/' +self.current_time)
         self.model_log = Log(self.model_name, self.model_name + ' ' + self.current_time)
         self.result = []
         self.recOutput = []

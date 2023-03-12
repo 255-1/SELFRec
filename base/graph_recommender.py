@@ -125,5 +125,4 @@ class GraphRecommender(Recommender):
         print('*Best Performance* ')
         print('Epoch:', str(self.bestPerformance[0]) + ',', bp)
         print('-' * 120)
-        self.writer.add_scalars(self.model_name, {'recall':self.bestPerformance[1]['Recall'], 'NDCG':self.bestPerformance[1]['NDCG']}, epoch)
         return (epoch -self.bestPerformance[0]) >= 15
