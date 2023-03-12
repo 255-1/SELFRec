@@ -28,7 +28,7 @@ class SGL(GraphRecommender):
         for epoch in range(self.maxEpoch):
             dropped_adj1 = model.graph_reconstruction()
             dropped_adj2 = model.graph_reconstruction()
-            n_negs = 2
+            n_negs = 1024
             strategy = 'mns'
             rec_temp = 0.2
             rec_norm = True
