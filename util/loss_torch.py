@@ -279,7 +279,7 @@ def InfoNCE(view1, view2, temperature):
     cl_loss = -torch.log(10e-8 + pos_score / ttl_score)
     return torch.mean(cl_loss)
 
-def SSSM(anchor, pos, neg, temperature, normalize=False, freq_pos=None, freq_neg=None):
+def SSM(anchor, pos, neg, temperature, normalize=False, freq_pos=None, freq_neg=None):
     if normalize:
         anchor, pos, neg = F.normalize(anchor, dim=-1), F.normalize(pos, dim=-1), F.normalize(neg, dim=-1)
     pos_score = (anchor * pos).sum(dim=-1)
@@ -297,7 +297,7 @@ def SSSM(anchor, pos, neg, temperature, normalize=False, freq_pos=None, freq_neg
     cl_loss = -torch.log(10e-8 + pos_score / ttl_score)
     return torch.mean(cl_loss)
 
-def mnssm(anchor, pos, neg, temperature, normalize=False, freq_pos=None, freq_neg=None):
+def SInfoNCE(anchor, pos, neg, temperature, normalize=False, freq_pos=None, freq_neg=None):
     if normalize:
         anchor, pos, neg = F.normalize(anchor, dim=-1), F.normalize(pos, dim=-1), F.normalize(neg, dim=-1)
     pos_score = (anchor * pos).sum(dim=-1)
@@ -344,86 +344,3 @@ def sample_cl_negtive_idx(idx, sample_num):
         neg_idx = torch.cat((neg_idx, u_idx[(i+1):]))[:sample_num].unsqueeze(dim=0)
         neg_sample_idx = torch.cat((neg_sample_idx, neg_idx), dim=0)
     return u_idx.view(-1,1), neg_sample_idx
-
-if __name__=="__main__":
-    initializer = nn.init.xavier_uniform_
-    idx = list(range(2048))
-    u_idx, neg_sample_idx = sample_cl_negtive_idx(idx, 2048)
-    tau = 0.2
-
-    #测试kssm_dict分开写是否结果一致
-    count = 0.0
-    for i  in range(600):
-        a = torch.rand(2048, 16)
-        p = torch.rand(6666, 16)
-        neg = torch.rand(8888, 16)
-
-        # res1 = kssm_dict(a, {p: u_idx}, {neg: neg_sample_idx}, [1], [False],[1])
-        res1 = kssm2(a,p[idx],neg,neg_sample_idx,1,False)
-        # res2 = kssm_p(a, p, u_idx, neg, neg_sample_idx)
-        res2 = SSSM(a, p[idx], neg[neg_sample_idx], 1, False)
-        if res1 != res2:
-            print(res1-res2)
-            count += (res1-res2)
-    print(count)
-
-    # 测试个体判别
-    # a = initializer(torch.empty(2048, 64))
-    # res1 = InfoNCE(a,a,tau)
-    # # res2 = kssm(a[u_idx],a[u_idx],a, neg_sample_idx, tau, normalized=True)
-    # res2 = SSSM(a,a[idx], a[neg_sample_idx], 0.2, True)
-    # print(res1 == res2)
-
-    # 测试对比学习不同矩阵
-    # view_1 = initializer(torch.empty(2048, 64)).cuda()
-    # view_2 = initializer(torch.empty(2048, 64)).cuda()
-    # res1 = InfoNCE(view_1,view_2,tau)
-    # pos_sample_idx = torch.Tensor(idx).type(torch.long).view(-1, 1)
-    # res2 = kssm_p(view_1[u_idx], view_2, pos_sample_idx, view_2, neg_sample_idx, tau, normalized=True)
-    # res3 = kssm(view_1[u_idx],view_2[u_idx],view_2, neg_sample_idx, tau, normalized=True)
-    # print(res1 == res2, res1-res2,res1, res2)
-    # print(res2 == res3, )
-
-    # 多次测试
-    # count = 0.0
-    # for i in range(600):
-    #     a = initializer(torch.empty(2048, 64)).cuda()
-    #     b = initializer(torch.empty(2048, 64)).cuda()
-    #     res1 = InfoNCE(a,b,tau)
-    #     res2 = kssm(a[u_idx],b[u_idx],b, neg_sample_idx, tau, normalized=True)
-    #     if res1 != res2 :
-    #         print(res1-res2)
-    #         count += (res1-res2).item()
-    #     # else:
-    #     #     print(res1 == res2)
-    # print("count = ", count)
-
-    # count = 0.0
-    # for i in range(600):
-    #     user_emb = torch.rand(2048, 64).cuda()
-    #     inter_emb = torch.rand(2048, 64).cuda()
-    #     neg_emb = torch.rand(2048, 64).cuda()
-    #     neg_idx = list(range(2048))
-    #     neg_sample_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, 1)
-    #     res1 = bpr_k(user_emb,inter_emb,neg_emb)
-    #     res2 = kssm_p(user_emb[neg_idx], inter_emb, torch.Tensor(neg_idx).type(torch.long).view(-1,1), neg_emb, neg_sample_idx,1,False)
-    #     # res2 = kssm(user_emb[neg_idx],inter_emb[neg_idx],neg_emb, neg_sample_idx, 1, normalized=False)
-    #     if res1 != res2:
-    #         count += (res1-res2).item()
-    # print(count)
-
-
-    # epoch = 2000
-    # import time
-    # start_time = time.time()
-    # for i in range(epoch):
-    #     kssm(a[idx],a[idx],a, neg_sample_idx, tau, normalized=True)
-    # end_time = time.time()
-    # print(end_time - start_time)
-    # start_time = time.time()
-    # for i in range(epoch):
-    #     kssm2(a[idx],a[idx],a, neg_sample_idx, tau, normalized=True)
-    # end_time = time.time()
-    # print(end_time - start_time)
-
-    # kssm2(a[idx],a[idx],a, neg_sample_idx, tau, normalized=True)

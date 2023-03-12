@@ -5,7 +5,7 @@ from base.graph_recommender import GraphRecommender
 from util.conf import OptionConf
 from util.sampler import next_batch_pairwise, sampler_dual
 from base.torch_interface import TorchGraphInterface
-from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict, SSSM, mnssm
+from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict, SSM, SInfoNCE
 
 # Paper: XSimGCL - Towards Extremely Simple Graph Contrastive Learning for Recommendation
 
@@ -44,9 +44,9 @@ class XSimGCL(GraphRecommender):
                     freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
                     if bpr:
                         neg_item_idx = neg_item_idx[:,0].view(-1,1)
-                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        rec_loss = SSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
                     else:
-                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, None, freq_neg)
+                        rec_loss = SSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, None, freq_neg)
                 elif strategy == 'sbcnm':
                     user_idx, pos_idx, neg_idx, freq_pos, freq_neg, neg_idx2 = batch
                     rec_user_emb, rec_item_emb = model()
@@ -54,7 +54,7 @@ class XSimGCL(GraphRecommender):
                     neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
                     freq_pos = torch.Tensor(freq_pos).cuda()
                     freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
-                    rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, freq_pos, freq_neg)
+                    rec_loss = SSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, freq_pos, freq_neg)
                 elif strategy == 'inbatch':
                     user_idx, pos_idx, neg_idx, neg_idx2 = batch
                     rec_user_emb, rec_item_emb = model()
@@ -62,9 +62,9 @@ class XSimGCL(GraphRecommender):
                     neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
                     if bpr:
                         neg_item_idx = neg_item_idx[:,0].view(-1,1)
-                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        rec_loss = SSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
                     else:
-                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        rec_loss = SSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
                 elif strategy == 'random':
                     user_idx, pos_idx, neg_idx, neg_idx2 = batch
                     rec_user_emb, rec_item_emb = model()
@@ -72,12 +72,12 @@ class XSimGCL(GraphRecommender):
                     neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
                     if bpr:
                         neg_item_idx = neg_item_idx[:,0].view(-1,1)
-                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        rec_loss = SSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
                     else:
-                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        rec_loss = SSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
                 rec_user_emb, rec_item_emb, cl_user_emb, cl_item_emb  = model(True)
-                user_cl_loss = mnssm(rec_user_emb[user_idx], cl_user_emb[user_idx], cl_user_emb[neg_idx2], self.temp, True)
-                item_cl_loss = mnssm(rec_item_emb[pos_idx], cl_item_emb[pos_idx], cl_item_emb[neg_idx], self.temp, True)
+                user_cl_loss = SInfoNCE(rec_user_emb[user_idx], cl_user_emb[user_idx], cl_user_emb[neg_idx2], self.temp, True)
+                item_cl_loss = SInfoNCE(rec_item_emb[pos_idx], cl_item_emb[pos_idx], cl_item_emb[neg_idx], self.temp, True)
                 cl_loss = self.cl_rate *(user_cl_loss + item_cl_loss)
                 batch_loss =  rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb) + cl_loss
                 # Backward and optimize
