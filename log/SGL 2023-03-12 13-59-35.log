@@ -1,0 +1,13 @@
+2023-03-12 13:59:44,549 - SGL - INFO - ### model configuration ###
+2023-03-12 13:59:44,549 - SGL - INFO - training.set=./dataset/yelp2018/train.txt
+2023-03-12 13:59:44,549 - SGL - INFO - test.set=./dataset/yelp2018/test.txt
+2023-03-12 13:59:44,550 - SGL - INFO - model.name=SGL
+2023-03-12 13:59:44,550 - SGL - INFO - model.type=graph
+2023-03-12 13:59:44,550 - SGL - INFO - item.ranking=-topN 10,20
+2023-03-12 13:59:44,550 - SGL - INFO - embbedding.size=64
+2023-03-12 13:59:44,550 - SGL - INFO - num.max.epoch=300
+2023-03-12 13:59:44,550 - SGL - INFO - batch_size=1024
+2023-03-12 13:59:44,550 - SGL - INFO - learnRate=0.001
+2023-03-12 13:59:44,550 - SGL - INFO - reg.lambda=0.0001
+2023-03-12 13:59:44,550 - SGL - INFO - SGL=-n_layer 2 -lambda 0.1 -droprate 0.1 -augtype 1 -temp 0.2
+2023-03-12 13:59:44,550 - SGL - INFO - output.setup=-dir ./results/

@@ -8,7 +8,7 @@ from base.torch_interface import TorchGraphInterface
 from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, bpr_k, kssm, kssm_p, kssm_dict, SSM, SInfoNCE
 import numpy as np
 # Paper: Are graph augmentations necessary? simple graph contrastive learning for recommendation. SIGIR'22
-torch.cuda.set_device(2)
+torch.cuda.set_device(3)
 class SimGCL(GraphRecommender):
     def __init__(self, conf, training_set, test_set):
         super(SimGCL, self).__init__(conf, training_set, test_set)
@@ -28,7 +28,7 @@ class SimGCL(GraphRecommender):
         print(self.get_parameter_number(model))
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lRate)
         for epoch in range(self.maxEpoch):
-            n_negs = 1024
+            n_negs = 2
             rec_temp = 0.2
             rec_norm = True
             strategy = 'mns'
