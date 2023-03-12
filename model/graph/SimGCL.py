@@ -31,8 +31,8 @@ class SimGCL(GraphRecommender):
         for epoch in range(self.maxEpoch):
             n_negs = 1024
             rec_temp = 0.2
-            rec_norm = False
-            strategy = 'inbatch'
+            rec_norm = True
+            strategy = 'mns'
             bpr = False
             print('strategy: ', strategy, 'n_negs: ', n_negs, 'rec_temp: ', rec_temp, 'rec_norm: ', rec_norm, 'bpr: ', bpr)
             for n, batch in enumerate(sampler_dual(self.data, self.batch_size, n_negs, strategy=strategy)):

@@ -10,7 +10,7 @@ from data.augmentor import GraphAugmentor
 
 # Paper: self-supervised graph learning for recommendation. SIGIR'21
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 class SGL(GraphRecommender):
     def __init__(self, conf, training_set, test_set):
         super(SGL, self).__init__(conf, training_set, test_set)

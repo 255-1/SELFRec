@@ -27,8 +27,8 @@ class XSimGCL(GraphRecommender):
         for epoch in range(self.maxEpoch):
             n_negs = 1024
             rec_temp = 0.2
-            rec_norm = False
-            strategy = 'inbatch'
+            rec_norm = True
+            strategy = 'mns'
             bpr = False
             dual_sample = True
             print('strategy: ', strategy, 'n_negs: ', n_negs, 'rec_temp: ', rec_temp, 'rec_norm: ', rec_norm, 'bpr: ', bpr, 'dual_sample: ', dual_sample)

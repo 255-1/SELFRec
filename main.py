@@ -15,7 +15,7 @@ if __name__ == '__main__':
     print('   '.join(graph_models))
 
     print('=' * 80)
-    model = 'SimGCL'
+    model = input("Input model name: ")
     import time
 
     s = time.time()
