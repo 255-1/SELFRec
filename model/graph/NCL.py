@@ -3,13 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from base.graph_recommender import GraphRecommender
 from util.conf import OptionConf
-from util.sampler import next_batch_pairwise, next_batch_pairwise_k
+from util.sampler import next_batch_pairwise, next_batch_pairwise_k, sampler_dual, next_batch_pairwise2, sampler_single
 from base.torch_interface import TorchGraphInterface
-from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict
+from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict, SSSM, mnssm
 import faiss
 # paper: Improving Graph Collaborative Filtering with Neighborhood-enriched Contrastive Learning. WWW'22
-
-torch.cuda.set_device(0)
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+cuda_id = 0
+torch.cuda.set_device(cuda_id)
 class NCL(GraphRecommender):
     def __init__(self, conf, training_set, test_set):
         super(NCL, self).__init__(conf, training_set, test_set)
@@ -35,7 +37,7 @@ class NCL(GraphRecommender):
 
     def run_kmeans(self, x):
         """Run K-means algorithm to get k clusters of the input tensor x        """
-        kmeans = faiss.Kmeans(d=self.emb_size, k=self.k, gpu=False)
+        kmeans = faiss.Kmeans(d=self.emb_size, k=self.k, gpu=cuda_id)
         kmeans.train(x)
         cluster_cents = kmeans.centroids
         _, I = kmeans.index.search(x, 1)
@@ -89,41 +91,151 @@ class NCL(GraphRecommender):
         model = self.model.cuda()
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lRate)
         for epoch in range(self.maxEpoch):
-            n_negs = 1
-            if epoch >= 20:
-                self.e_step()
-            for n, batch in enumerate(next_batch_pairwise(self.data, self.batch_size, n_negs=n_negs)):
-                user_idx, pos_idx, neg_idx = batch
-                model.train()
-                rec_user_emb, rec_item_emb, emb_list  = model()
-                user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
-                rec_item_idx = torch.Tensor(pos_idx).type(torch.long).view(-1, 1)
-                neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
-                rec_loss = kssm_dict(rec_user_emb[user_idx], {rec_item_emb:rec_item_idx}
-                                   ,{rec_item_emb: neg_item_idx}, [1],[False],[1])
-                # rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
-                initial_emb = emb_list[0]
-                context_emb = emb_list[self.hyper_layers*2]
-                ssl_loss = self.ssl_layer_loss(context_emb,initial_emb,user_idx,pos_idx)
-                warm_up_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb)/self.batch_size  + ssl_loss
+            n_negs = 1024
+            strategy = 'mns'
+            rec_temp = 0.2
+            rec_norm = True
+            bpr = False
+            dual_sample = True
+            print('strategy: ', strategy, 'n_negs: ', n_negs, 'rec_temp: ', rec_temp, 'rec_norm: ', rec_norm, 'bpr: ', bpr, 'dual_sample: ', dual_sample)
 
-                if epoch<20: #warm_up
-                    optimizer.zero_grad()
-                    warm_up_loss.backward()
-                    optimizer.step()
-                    self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item()}, epoch*self.batch_size+n)
-                    if n % 100 == 0:
-                        print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'ssl_loss', ssl_loss.item())
-                else:
-                    # Backward and optimize
-                    proto_loss = self.ProtoNCE_loss(initial_emb, user_idx, pos_idx)
-                    self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item(), 'proto_loss':proto_loss.item()}, epoch*self.batch_size+n)
-                    batch_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb) / self.batch_size + ssl_loss + proto_loss
-                    optimizer.zero_grad()
-                    batch_loss.backward()
-                    optimizer.step()
-                    if n % 100==0:
-                        print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'ssl_loss', ssl_loss.item(), 'proto_loss', proto_loss.item())
+            if dual_sample:
+                if epoch >= 0:
+                    self.e_step()
+                for n, batch in enumerate(sampler_dual(self.data, self.batch_size, n_negs, strategy=strategy)):
+                    if strategy == 'mns':
+                        if n_negs <= 1:
+                            print('one negative sample not suitable for mns sampling strategy')
+                            break
+                        user_idx, pos_idx, neg_idx, freq_pos, freq_neg, neg_idx2 = batch
+                        rec_user_emb, rec_item_emb, emb_list = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
+                        if bpr:
+                            neg_item_idx = neg_item_idx[:,0].view(-1,1)
+                            rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        else:
+                            rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, None, freq_neg)
+                    elif strategy == 'sbcnm':
+                        user_idx, pos_idx, neg_idx, freq_pos, freq_neg, neg_idx2 = batch
+                        rec_user_emb, rec_item_emb, emb_list = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        freq_pos = torch.Tensor(freq_pos).cuda()
+                        freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, freq_pos, freq_neg)
+                    elif strategy == 'inbatch':
+                        user_idx, pos_idx, neg_idx, neg_idx2 = batch
+                        rec_user_emb, rec_item_emb, emb_list = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        if bpr:
+                            neg_item_idx = neg_item_idx[:,0].view(-1,1)
+                            rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        else:
+                            rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                    elif strategy == 'random':
+                        user_idx, pos_idx, neg_idx, neg_idx2 = batch
+                        rec_user_emb, rec_item_emb, emb_list = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        if bpr:
+                            neg_item_idx = neg_item_idx[:,0].view(-1,1)
+                            rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                        else:
+                            rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+
+                    # rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
+                    initial_emb = emb_list[0]
+                    context_emb = emb_list[self.hyper_layers*2]
+                    # ssl_loss = self.ssl_layer_loss(context_emb,initial_emb,user_idx,pos_idx)
+                    context_user_emb_all, context_item_emb_all = torch.split(context_emb, [self.data.user_num, self.data.item_num])
+                    initial_user_emb_all, initial_item_emb_all = torch.split(initial_emb, [self.data.user_num, self.data.item_num])
+                    ssl_loss_user = mnssm(context_user_emb_all[user_idx], initial_user_emb_all[user_idx], initial_user_emb_all[neg_idx2], 0.2, True)
+                    ssl_loss_item = mnssm(context_item_emb_all[pos_idx], initial_item_emb_all[pos_idx], initial_item_emb_all[neg_idx], 0.2, True)
+                    ssl_loss = self.ssl_reg * (ssl_loss_user + self.alpha * ssl_loss_item)
+                    warm_up_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb)/self.batch_size  + ssl_loss
+
+                    if epoch<0: #warm_up
+                        optimizer.zero_grad()
+                        warm_up_loss.backward()
+                        optimizer.step()
+                        self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item()}, epoch*self.batch_size+n)
+                        if n % 100 == 0:
+                            print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'ssl_loss', ssl_loss.item())
+                    else:
+                        # Backward and optimize
+                        proto_loss = self.ProtoNCE_loss(initial_emb, user_idx, pos_idx)
+                        self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item(), 'proto_loss':proto_loss.item()}, epoch*self.batch_size+n)
+                        batch_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb) / self.batch_size + ssl_loss + proto_loss
+                        optimizer.zero_grad()
+                        batch_loss.backward()
+                        optimizer.step()
+                        if n % 100==0:
+                            print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'ssl_loss', ssl_loss.item(), 'proto_loss', proto_loss.item())
+            else:
+                if epoch >= 20:
+                    self.e_step()
+                for n, batch in enumerate(sampler_single(self.data, self.batch_size, n_negs, strategy=strategy)):
+                    if strategy == 'mns':
+                        if n_negs <= 1:
+                            print('one negative sample not suitable for mns sampling strategy')
+                            break
+                        user_idx, pos_idx, neg_idx, freq_pos, freq_neg = batch
+                        model.train()
+                        rec_user_emb, rec_item_emb, emb_list  = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, None, freq_neg)
+                    elif strategy == 'sbcnm':
+                        user_idx, pos_idx, neg_idx, freq_pos, freq_neg = batch
+                        model.train()
+                        rec_user_emb, rec_item_emb, emb_list  = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        freq_pos = torch.Tensor(freq_pos).cuda()
+                        freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, freq_pos, freq_neg)
+                    elif strategy == 'inbatch':
+                        user_idx, pos_idx, neg_idx = batch
+                        model.train()
+                        rec_user_emb, rec_item_emb, emb_list  = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                    elif strategy == 'random':
+                        user_idx, pos_idx, neg_idx = batch
+                        model.train()
+                        rec_user_emb, rec_item_emb, emb_list  = model()
+                        user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                        neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+
+                    # rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
+                    initial_emb = emb_list[0]
+                    context_emb = emb_list[self.hyper_layers*2]
+                    ssl_loss = self.ssl_layer_loss(context_emb,initial_emb,user_idx,pos_idx)
+                    warm_up_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb)/self.batch_size  + ssl_loss
+
+                    if epoch<20: #warm_up
+                        optimizer.zero_grad()
+                        warm_up_loss.backward()
+                        optimizer.step()
+                        self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item()}, epoch*self.batch_size+n)
+                        if n % 100 == 0:
+                            print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'ssl_loss', ssl_loss.item())
+                    else:
+                        # Backward and optimize
+                        proto_loss = self.ProtoNCE_loss(initial_emb, user_idx, pos_idx)
+                        self.writer.add_scalars('NCL', {'rec_loss:':rec_loss.item(), 'ssl_loss:':ssl_loss.item(), 'proto_loss':proto_loss.item()}, epoch*self.batch_size+n)
+                        batch_loss = rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb, neg_item_emb) / self.batch_size + ssl_loss + proto_loss
+                        optimizer.zero_grad()
+                        batch_loss.backward()
+                        optimizer.step()
+                        if n % 100==0:
+                            print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'ssl_loss', ssl_loss.item(), 'proto_loss', proto_loss.item())
             model.eval()
             with torch.no_grad():
                 self.user_emb, self.item_emb, _ = model()

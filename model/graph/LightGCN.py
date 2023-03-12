@@ -2,14 +2,14 @@ import torch
 import torch.nn as nn
 from base.graph_recommender import GraphRecommender
 from util.conf import OptionConf
-from util.sampler import next_batch_pairwise, next_batch_pairwise_k, sample_cl_negtive_idx, next_batch_pairwise_in_batch
+from util.sampler import next_batch_pairwise, next_batch_pairwise_k, sample_cl_negtive_idx, next_batch_pairwise_inbatch
 from base.torch_interface import TorchGraphInterface
 from util.loss_torch import bpr_loss,l2_reg_loss, bpr_k, kssm, kssm_p, kssm_dict, SSSM
 import torch.nn.functional as F
 import time
 # paper: LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation. SIGIR'20
 
-cuda_id=3
+cuda_id=1
 class LightGCN(GraphRecommender):
     def __init__(self, conf, training_set, test_set):
         super(LightGCN, self).__init__(conf, training_set, test_set)
@@ -22,29 +22,26 @@ class LightGCN(GraphRecommender):
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lRate)
         for epoch in range(self.maxEpoch):
             start = time.time()
-            for n, batch in enumerate(next_batch_pairwise_in_batch(self.data, self.batch_size)):
+            for n, batch in enumerate(next_batch_pairwise_inbatch(self.data, self.batch_size)):
+            # for n, batch in enumerate(next_batch_pairwise(self.data, self.batch_size)):
                 user_idx, pos_idx, neg_idx, n_negs = batch
+                # user_idx, pos_idx, neg_idx = batch
                 rec_user_emb, rec_item_emb = model()
                 user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
-                neg_sample_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                neg_sample_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs) #n_negs
                 bpr_loss = SSSM(rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_sample_idx], 0.2, False)
                 l2_loss = l2_reg_loss(self.reg, user_emb,rec_item_emb[pos_idx],rec_item_emb[neg_sample_idx].view(-1, self.emb_size))/self.batch_size
                 batch_loss = bpr_loss+l2_loss
                 # Backward and optimize
                 optimizer.zero_grad()
                 batch_loss.backward()
-                # for name, parms in model.named_parameters():
-                #     self.writer.add_histogram(name+'_grad', parms.grad, epoch*self.batch_size+n)
-                #     self.writer.add_histogram(name+'_data', parms, epoch*self.batch_size+n)
                 optimizer.step()
-                self.writer.add_scalars('LightGCN', {'batch_loss':batch_loss.item()}, epoch*self.batch_size+n)
                 if n % 100 == 0:
                     print('training:', epoch + 1, 'batch', n, 'batch_loss:', batch_loss.item())
             with torch.no_grad():
                 self.user_emb, self.item_emb = model()
-            if epoch % 5 == 0:
-                if(self.fast_evaluation(epoch)):
-                    break;
+            if(self.fast_evaluation(epoch)):
+                break;
             end = time.time()
             print(start-end)
         self.writer.flush()
@@ -53,11 +50,7 @@ class LightGCN(GraphRecommender):
 
     def save(self):
         with torch.no_grad():
-            import os
             self.best_user_emb, self.best_item_emb = self.model()
-            if not os.path.exists('weight/'+self.current_time):
-                os.mkdir('weight/'+self.current_time)
-            torch.save(self.model.state_dict(), 'weight/'+self.current_time+'/model.pth')
 
     def predict(self, u):
         u = self.data.get_user_id(u)

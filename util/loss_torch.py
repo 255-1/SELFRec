@@ -268,7 +268,6 @@ def batch_softmax_loss(user_emb, item_emb, temperature):
     loss = -torch.log(pos_score / ttl_score)
     return torch.mean(loss)
 
-
 def InfoNCE(view1, view2, temperature):
     view1, view2 = F.normalize(view1, dim=1), F.normalize(view2, dim=1)
     pos_score = (view1 * view2).sum(dim=-1)
@@ -280,17 +279,46 @@ def InfoNCE(view1, view2, temperature):
     cl_loss = -torch.log(10e-8 + pos_score / ttl_score)
     return torch.mean(cl_loss)
 
-def SSSM(anchor, pos, neg, temperature, normalize=False):
+def SSSM(anchor, pos, neg, temperature, normalize=False, freq_pos=None, freq_neg=None):
     if normalize:
         anchor, pos, neg = F.normalize(anchor, dim=-1), F.normalize(pos, dim=-1), F.normalize(neg, dim=-1)
     pos_score = (anchor * pos).sum(dim=-1)
-    pos_score = torch.exp(pos_score/temperature)
+    pos_score = pos_score/temperature
+    if freq_pos is not None:
+        pos_score = pos_score - torch.log(freq_pos)
+    pos_score = torch.exp(pos_score)
     ttl_score = pos_score
     neg_score = (anchor.unsqueeze(dim=1) * neg).sum(dim=-1)
-    neg_score = torch.exp(neg_score/temperature).sum(dim=-1)
+    neg_score = neg_score / temperature
+    if freq_neg is not None:
+        neg_score = neg_score - torch.log(freq_neg)
+    neg_score = torch.exp(neg_score).sum(dim=-1)
     ttl_score = ttl_score + neg_score
     cl_loss = -torch.log(10e-8 + pos_score / ttl_score)
     return torch.mean(cl_loss)
+
+def mnssm(anchor, pos, neg, temperature, normalize=False, freq_pos=None, freq_neg=None):
+    if normalize:
+        anchor, pos, neg = F.normalize(anchor, dim=-1), F.normalize(pos, dim=-1), F.normalize(neg, dim=-1)
+    pos_score = (anchor * pos).sum(dim=-1)
+    pos_score = pos_score/temperature
+    if freq_pos is not None:
+        freq_pos = torch.Tensor(freq_pos).to(pos_score.device)
+        pos_score = pos_score - torch.log(freq_pos)
+    pos_score = torch.exp(pos_score)
+    ttl_score = pos_score
+    neg = neg.view(anchor.shape[0], -1, anchor.shape[1])
+    neg_score = (anchor.unsqueeze(dim=1) * neg).sum(dim=-1)
+    neg_score = neg_score / temperature
+    if freq_neg is not None:
+        freq_neg = torch.Tensor(freq_neg).to(neg_score.device)
+        freq_neg = freq_neg.view(anchor.shape[0], -1)
+        neg_score = neg_score - torch.log(freq_neg)
+    neg_score = torch.exp(neg_score).sum(dim=-1)
+    ttl_score = ttl_score + neg_score
+    cl_loss = -torch.log(10e-8 + pos_score / ttl_score)
+    return torch.mean(cl_loss)
+
 
 
 

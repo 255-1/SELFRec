@@ -43,7 +43,7 @@ class GraphRecommender(Recommender):
 
         # predict
         rec_list = {}
-        user_count = len(self.data.test_set)
+        # user_count = len(self.data.test_set)
         for i, user in enumerate(self.data.test_set):
             candidates = self.predict(user)
             # predictedItems = denormalize(predictedItems, self.data.rScale[-1], self.data.rScale[0])
@@ -53,9 +53,9 @@ class GraphRecommender(Recommender):
             ids, scores = find_k_largest(self.max_N, candidates)
             item_names = [self.data.id2item[iid] for iid in ids]
             rec_list[user] = list(zip(item_names, scores))
-            if i % 1000 == 0:
-                process_bar(i, user_count)
-        process_bar(user_count, user_count)
+        #     if i % 1000 == 0:
+        #         process_bar(i, user_count)
+        # process_bar(user_count, user_count)
         print('')
         return rec_list
 
@@ -126,4 +126,4 @@ class GraphRecommender(Recommender):
         print('Epoch:', str(self.bestPerformance[0]) + ',', bp)
         print('-' * 120)
         self.writer.add_scalars(self.model_name, {'recall':self.bestPerformance[1]['Recall'], 'NDCG':self.bestPerformance[1]['NDCG']}, epoch)
-        return (epoch -self.bestPerformance[0]) >= 10
+        return (epoch -self.bestPerformance[0]) >= 15

@@ -1,6 +1,267 @@
 from random import shuffle,randint,choice, sample
 import torch
 import numpy as np
+from random import shuffle,randint,choice, sample
+import torch
+import numpy as np
+from collections import Counter
+def sampler_dual(data,batch_size,n_negs=1, strategy='random'):
+    training_data = data.training_data
+    shuffle(training_data)
+    batch_id = 0
+    data_size = len(training_data)
+    if strategy == 'random':
+        item_list = list(data.item.keys())
+        user_list = list(data.user.keys())
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx, k_idx = [], [], [], []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    neg_item = choice(item_list)
+                    while neg_item in data.training_set_u[user]:
+                        neg_item = choice(item_list)
+                    j_idx.append(data.item[neg_item])
+                    neg_user = choice(user_list)
+                    while neg_user in data.training_set_i[items[i]]:
+                        neg_user = choice(user_list)
+                    k_idx.append(data.user[neg_user])
+            yield u_idx, i_idx, j_idx, k_idx
+    if strategy == 'inbatch':
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx, k_idx = [], [], [], []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    neg_item = choice(items)
+                    while neg_item in data.training_set_u[user]:
+                        neg_item = choice(items)
+                    j_idx.append(data.item[neg_item])
+                    neg_user = choice(users)
+                    while neg_user in data.training_set_i[items[i]]:
+                        neg_user = choice(users)
+                    k_idx.append(data.user[neg_user])
+            yield u_idx, i_idx, j_idx, k_idx
+    if strategy == 'sbcnm':
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx, k_idx = [], [], [], []
+
+            item_freq = Counter(items)
+            for item_id in item_freq:
+                item_freq[item_id]/=len(items)
+            freq_i = []
+            freq_j = []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                freq_i.append(item_freq[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    neg_item = choice(items)
+                    while neg_item in data.training_set_u[user]:
+                        neg_item = choice(items)
+                    j_idx.append(data.item[neg_item])
+                    freq_j.append(item_freq[neg_item])
+                    neg_user = choice(users)
+                    while neg_user in data.training_set_i[items[i]]:
+                        neg_user = choice(users)
+                    k_idx.append(data.user[neg_user])
+            yield u_idx, i_idx, j_idx, freq_i, freq_j, k_idx
+    if strategy == 'mns':
+        if n_negs <= 2048:
+            num_inbatch = n_negs // 2
+        else:
+            num_inbatch = 1024
+        item_list = list(data.item.keys())
+        user_list = list(data.user.keys())
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx, k_idx = [], [], [], []
+
+            item_freq = Counter(items)
+            for item_id in item_freq:
+                item_freq[item_id]/=len(items)
+            freq_i = []
+            freq_j = []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                freq_i.append(item_freq[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    if m < num_inbatch:
+                        neg_item = choice(items)
+                        while neg_item in data.training_set_u[user]:
+                            neg_item = choice(items)
+                        j_idx.append(data.item[neg_item])
+                        freq_j.append(item_freq[neg_item])
+                        neg_user = choice(users)
+                        while neg_user in data.training_set_i[items[i]]:
+                            neg_user = choice(users)
+                        k_idx.append(data.user[neg_user])
+                    else:
+                        neg_item = choice(item_list)
+                        while neg_item in data.training_set_u[user]:
+                            neg_item = choice(item_list)
+                        j_idx.append(data.item[neg_item])
+                        freq_j.append(1/(n_negs - num_inbatch))
+                        neg_user = choice(user_list)
+                        while neg_user in data.training_set_i[items[i]]:
+                            neg_user = choice(user_list)
+                        k_idx.append(data.user[neg_user])
+
+            yield u_idx, i_idx, j_idx, freq_i, freq_j, k_idx
+
+def sampler_single(data,batch_size,n_negs=1, strategy='random'):
+    training_data = data.training_data
+    shuffle(training_data)
+    batch_id = 0
+    data_size = len(training_data)
+    if strategy == 'random':
+        item_list = list(data.item.keys())
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx = [], [], []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    neg_item = choice(item_list)
+                    while neg_item in data.training_set_u[user]:
+                        neg_item = choice(item_list)
+                    j_idx.append(data.item[neg_item])
+            yield u_idx, i_idx, j_idx
+    if strategy == 'inbatch':
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx = [], [], []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    neg_item = choice(items)
+                    while neg_item in data.training_set_u[user]:
+                        neg_item = choice(items)
+                    j_idx.append(data.item[neg_item])
+            yield u_idx, i_idx, j_idx
+    if strategy == 'sbcnm':
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx = [], [], []
+
+            item_freq = Counter(items)
+            for item_id in item_freq:
+                item_freq[item_id]/=len(items)
+            freq_i = []
+            freq_j = []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                freq_i.append(item_freq[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    neg_item = choice(items)
+                    while neg_item in data.training_set_u[user]:
+                        neg_item = choice(items)
+                    j_idx.append(data.item[neg_item])
+                    freq_j.append(item_freq[neg_item])
+            yield u_idx, i_idx, j_idx, freq_i, freq_j
+    if strategy == 'mns':
+        if n_negs <= 2048:
+            num_inbatch = n_negs // 2
+        else:
+            num_inbatch = 1024
+        item_list = list(data.item.keys())
+        while batch_id < data_size:
+            if batch_id + batch_size <= data_size:
+                users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+                items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+                batch_id += batch_size
+            else:
+                users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+                items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+                batch_id = data_size
+            u_idx, i_idx, j_idx = [], [], []
+
+            item_freq = Counter(items)
+            for item_id in item_freq:
+                item_freq[item_id]/=len(items)
+            freq_i = []
+            freq_j = []
+            for i, user in enumerate(users):
+                i_idx.append(data.item[items[i]])
+                freq_i.append(item_freq[items[i]])
+                u_idx.append(data.user[user])
+                for m in range(n_negs):
+                    if m < num_inbatch:
+                        neg_item = choice(items)
+                        while neg_item in data.training_set_u[user]:
+                            neg_item = choice(items)
+                        j_idx.append(data.item[neg_item])
+                        freq_j.append(item_freq[neg_item])
+                    else:
+                        neg_item = choice(item_list)
+                        while neg_item in data.training_set_u[user]:
+                            neg_item = choice(item_list)
+                        j_idx.append(data.item[neg_item])
+                        freq_j.append(1/(n_negs - num_inbatch))
+                        # if neg_item in item_freq:
+                        #     freq_j.append(item_freq[neg_item])
+                        # else:
+                        #     freq_j.append(1/(n_negs - num_inbatch))
+
+            yield u_idx, i_idx, j_idx, freq_i, freq_j
 
 def next_batch_pairwise(data,batch_size,n_negs=1):
     training_data = data.training_data

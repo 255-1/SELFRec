@@ -3,13 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from base.graph_recommender import GraphRecommender
 from util.conf import OptionConf
-from util.sampler import next_batch_pairwise, next_batch_pairwise_k
+from util.sampler import next_batch_pairwise, sampler_dual
 from base.torch_interface import TorchGraphInterface
-from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict
+from util.loss_torch import bpr_loss, l2_reg_loss, InfoNCE, kssm_dict, SSSM, mnssm
 
 # Paper: XSimGCL - Towards Extremely Simple Graph Contrastive Learning for Recommendation
 
-
+torch.cuda.set_device(1)
 class XSimGCL(GraphRecommender):
     def __init__(self, conf, training_set, test_set):
         super(XSimGCL, self).__init__(conf, training_set, test_set)
@@ -25,23 +25,65 @@ class XSimGCL(GraphRecommender):
         model = self.model.cuda()
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lRate)
         for epoch in range(self.maxEpoch):
-            n_negs = 64
-            for n, batch in enumerate(next_batch_pairwise_k(self.data, self.batch_size, n_negs=n_negs)):
-                user_idx, pos_idx, neg_idx = batch
+            n_negs = 1024
+            rec_temp = 0.2
+            rec_norm = False
+            strategy = 'inbatch'
+            bpr = False
+            dual_sample = True
+            print('strategy: ', strategy, 'n_negs: ', n_negs, 'rec_temp: ', rec_temp, 'rec_norm: ', rec_norm, 'bpr: ', bpr, 'dual_sample: ', dual_sample)
+            for n, batch in enumerate(sampler_dual(self.data, self.batch_size, n_negs, strategy=strategy)):
+                if strategy == 'mns':
+                    if n_negs <= 1:
+                        print('one negative sample not suitable for mns sampling strategy')
+                        break
+                    user_idx, pos_idx, neg_idx, freq_pos, freq_neg, neg_idx2 = batch
+                    rec_user_emb, rec_item_emb = model()
+                    user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                    neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                    freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
+                    if bpr:
+                        neg_item_idx = neg_item_idx[:,0].view(-1,1)
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                    else:
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, None, freq_neg)
+                elif strategy == 'sbcnm':
+                    user_idx, pos_idx, neg_idx, freq_pos, freq_neg, neg_idx2 = batch
+                    rec_user_emb, rec_item_emb = model()
+                    user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                    neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                    freq_pos = torch.Tensor(freq_pos).cuda()
+                    freq_neg = torch.Tensor(freq_neg).view(-1, n_negs).cuda()
+                    rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm, freq_pos, freq_neg)
+                elif strategy == 'inbatch':
+                    user_idx, pos_idx, neg_idx, neg_idx2 = batch
+                    rec_user_emb, rec_item_emb = model()
+                    user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                    neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                    if bpr:
+                        neg_item_idx = neg_item_idx[:,0].view(-1,1)
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                    else:
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                elif strategy == 'random':
+                    user_idx, pos_idx, neg_idx, neg_idx2 = batch
+                    rec_user_emb, rec_item_emb = model()
+                    user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
+                    neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
+                    if bpr:
+                        neg_item_idx = neg_item_idx[:,0].view(-1,1)
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
+                    else:
+                        rec_loss = SSSM(user_emb, rec_item_emb[pos_idx], rec_item_emb[neg_item_idx], rec_temp, rec_norm)
                 rec_user_emb, rec_item_emb, cl_user_emb, cl_item_emb  = model(True)
-                user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
-                # rec_loss = bpr_loss(user_emb, pos_item_emb, neg_item_emb)
-                rec_item_idx = torch.Tensor(pos_idx).type(torch.long).view(-1, 1)
-                neg_item_idx = torch.Tensor(neg_idx).type(torch.long).view(-1, n_negs)
-                rec_loss = kssm_dict(rec_user_emb[user_idx], {rec_item_emb:rec_item_idx}
-                                   ,{rec_item_emb: neg_item_idx}, [1],[False],[1])
-                cl_loss = self.cl_rate * self.cal_cl_loss([user_idx,pos_idx],rec_user_emb,cl_user_emb,rec_item_emb,cl_item_emb)
+                user_cl_loss = mnssm(rec_user_emb[user_idx], cl_user_emb[user_idx], cl_user_emb[neg_idx2], self.temp, True)
+                item_cl_loss = mnssm(rec_item_emb[pos_idx], cl_item_emb[pos_idx], cl_item_emb[neg_idx], self.temp, True)
+                cl_loss = self.cl_rate *(user_cl_loss + item_cl_loss)
                 batch_loss =  rec_loss + l2_reg_loss(self.reg, user_emb, pos_item_emb) + cl_loss
                 # Backward and optimize
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
-                self.writer.add_scalars('XSimGCL', {'rec_loss:':rec_loss.item(), 'cl_loss:':cl_loss.item()}, epoch*self.batch_size+n)
                 if n % 100==0:
                     print('training:', epoch + 1, 'batch', n, 'rec_loss:', rec_loss.item(), 'cl_loss', cl_loss.item())
             with torch.no_grad():
@@ -51,11 +93,12 @@ class XSimGCL(GraphRecommender):
         self.user_emb, self.item_emb = self.best_user_emb, self.best_item_emb
 
     def cal_cl_loss(self, idx, user_view1,user_view2,item_view1,item_view2):
-        u_idx = torch.unique(torch.Tensor(idx[0]).type(torch.long)).cuda()
-        i_idx = torch.unique(torch.Tensor(idx[1]).type(torch.long)).cuda()
-        user_cl_loss = InfoNCE(user_view1[u_idx], user_view2[u_idx], self.temp)
-        item_cl_loss = InfoNCE(item_view1[i_idx], item_view2[i_idx], self.temp)
-        return user_cl_loss + item_cl_loss
+        pass
+        # u_idx = torch.unique(torch.Tensor(idx[0]).type(torch.long)).cuda()
+        # i_idx = torch.unique(torch.Tensor(idx[1]).type(torch.long)).cuda()
+        # user_cl_loss = InfoNCE(user_view1[u_idx], user_view2[u_idx], self.temp)
+        # item_cl_loss = InfoNCE(item_view1[i_idx], item_view2[i_idx], self.temp)
+        # return user_cl_loss + item_cl_loss
 
 
     def save(self):
